@@ -1,0 +1,64 @@
+# Default values for chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+port: 5000
+image:
+  repository: nginx
+  tag: latest
+serviceName: nginx-service
+appName: wp-cms
+namespace: default
+label: nginx
+TargetPort: 5000
+containerName: nginx
+containerPort: 5000
+resources:
+  limits:
+    cpu: 1000m
+    memory: 762Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+ServicePort: 80
+name: nginx
+podName: nginx
+
+APP:
+  PORT: 5500
+  MORGAN_LOG_LEVEL: combined
+  WINSTON_LOG_LEVEL: debug
+  NODE_ENV: prod
+
+tolerations:
+  - effect: NoSchedule
+    key: appType
+    operator: Equal
+    value: nodejs_py
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: appType
+              operator: In
+              values:
+                - nodejs_py
+  podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - wp-cms
+          topologyKey: topology.kubernetes.io/zone
+
+whitelistIp:
+  - 52.172.205.59/32
+  - 52.172.178.185/32
+  - 52.172.185.61/32

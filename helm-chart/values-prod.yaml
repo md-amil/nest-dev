@@ -1,0 +1,38 @@
+# Default values for chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+port: 3000
+image:
+  repository: bfhlakscontainerregistry01.azurecr.io/wp-cms
+  tag: latest
+
+serviceName: wp-cms
+releaseName: wp-cms
+
+namespace: phr
+keyVaultName: PHR-AKS-PROD
+label: wp-cms
+TargetPort: 3000
+containerName: wp-cms
+containerPort: 3000
+ServicePort: 80
+name: wp-cms
+podName: wp-cms
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  cpu: 1000
+  memory: 500
+APP:
+  PORT: 3000
+  APP_ENV: production
+  HRX_SEARCH_BASE_URL: https://bfhlprodapigw.healthrx.co.in/hrx-search
+  APM_SERVER: http://elk-prod-internal.healthrx.co.in:8200
+
+whitelistIp:
+  - 52.172.205.59/32
+  - 52.172.178.185/32
+  - 52.172.185.61/32

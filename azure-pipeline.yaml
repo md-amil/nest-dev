@@ -1,0 +1,149 @@
+trigger:
+  - master
+
+variables:
+  DOCKER_BUILDKIT: 1
+  tag: $(Build.BuildId)
+  authUrl: 'https://rhccardimages.blob.core.windows.net/authpolicy/PROD/auth-prod-policy.xml'
+  guestAuthUrl: 'https://rhccardimages.blob.core.windows.net/authpolicy/PROD/auth-guest-prod.xml'
+  serviceUrl: 'https://api.healthrx.co.in/hrx-cms'
+  apimservice: bfhlprodapiservice
+  dockerfilePath: '**/Dockerfile'
+  repository: 'wp-cms'
+  image: $(repository):$(tag)
+  changesmadeinpath: 'https://rhccardimages.blob.core.windows.net/authpolicy/ChangesMadeInPath.ps1'
+
+resources:
+  - repo: self
+
+stages:
+  - stage: Build
+    displayName: Build and Deployment
+    jobs:
+      - job: Build
+        displayName: Build
+        pool: build-scaleset
+        steps:
+          - task: Docker@2
+            displayName: Build image ($(image))
+            inputs:
+              repository: $(repository)
+              containerRegistry: 'ebH-acr-prod'
+              command: 'build'
+              Dockerfile: $(dockerfilePath)
+              tags: |
+                $(tag)
+                latest
+              addBaseImageData: true
+              arguments: |
+                --build-arg BUILDKIT_INLINE_CACHE=1
+                --build-arg BASE_IMAGE=bfhlakscontainerregistry01.azurecr.io/node:20-alpine3.18
+                --cache-from bfhlakscontainerregistry01.azurecr.io/$(repository)
+
+          - task: Docker@2
+            displayName: Push image ($(image))
+            inputs:
+              repository: '$(repository)'
+              Dockerfile: $(dockerfilePath)
+              command: 'push'
+              containerRegistry: 'ebH-acr-prod'
+              tags: |
+                $(tag)
+                latest
+          - task: HelmInstaller@1
+            inputs:
+              helmVersionToInstall: '3.13.3'
+          - task: HelmDeploy@0
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceConnection: 'bfhl-aks-prod'
+              command: 'upgrade'
+              chartType: 'FilePath'
+              chartPath: './helm-chart'
+              namespace: "phr"
+              releaseName: 'wp-cms'
+              overrideValues: 'image.tag=$(Build.BuildId)'
+              valueFile: './helm-chart/values-prod.yaml'
+
+  - stage: ChangesMadeInPath
+    displayName: Identifying changes made in path
+    jobs:
+      - job: PowerShellScript
+        displayName: PowerShellScript
+        workspace:
+          clean: all
+        pool: build-scaleset
+        steps:
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                Invoke-WebRequest -Uri $(changesmadeinpath) -OutFile 'script.ps1'
+                .\script.ps1  -authorisation "Bearer $(system.accesstoken)" -pathFilter "api-management" -buildId $(Build.BuildId) -collectionUri $(System.CollectionUri) -project $(System.TeamProject)
+                Remove-Item -Path "script.ps1"
+            name: DetermineChangesMadeInDeploymentFolder
+            env:
+              SYSTEM_ACCESSTOKEN: ${system.accesstoken}
+
+  - stage: apim_deployment
+    displayName: APIM Deployment
+    pool:
+      vmImage: 'ubuntu-20.04'
+    jobs:
+      - job: wp_cms_deployment
+        condition: or(eq(variables['Build.Reason'], 'Manual'), eq(stageDependencies.ChangesMadeInPath.PowerShellScript.outputs['DetermineChangesMadeInDeploymentFolder.filesUpdated'], 'True'))
+        displayName: WP-CMS Deployment
+        workspace:
+          clean: all
+        steps:
+          - task: NuGetAuthenticate@0
+          - task: Bash@3
+            inputs:
+              targetType: 'inline'
+              script: |
+                wget https://packages.microsoft.com/config/ubuntu/18.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+                sudo lsof /var/lib/dpkg/lock
+                sudo dpkg -i packages-microsoft-prod.deb
+                rm packages-microsoft-prod.deb
+                sudo apt update; \
+                sudo apt install -y apt-transport-https && \
+                sudo apt update && \
+                sudo apt install -y dotnet-sdk-3.1
+                dotnet tool update --add-source https://pkgs.dev.azure.com/BFHL/_packaging/dotnet-utils/nuget/v3/index.json  -g apimtemplate --version 1.0.1
+
+          - task: replacetokens@3
+            inputs:
+              targetFiles: './api-management/wp-cms/wp-cms.yaml'
+              encoding: 'utf-8'
+              writeBOM: true
+              actionOnMissing: 'warn'
+              keepToken: false
+              tokenPrefix: '#{'
+              tokenSuffix: '}#'
+              useLegacyPattern: false
+              enableTransforms: false
+              enableTelemetry: true
+          - task: CmdLine@2
+            inputs:
+              script: |
+                export PATH="$PATH:$HOME/.dotnet/tools"
+                mkdir -p armtemplates
+                apim-templates create --configFile ./api-management/wp-cms/wp-cms.yaml
+          - task: AzureResourceManagerTemplateDeployment@3
+            inputs:
+              deploymentScope: 'Resource Group'
+              azureResourceManagerConnection: 'Prod API Gateway'
+              subscriptionId: '871f2c0d-ee0f-445b-990c-1d1fc4411914'
+              action: 'Create Or Update Resource Group'
+              resourceGroupName: 'BFHL-PROD-PASS-RG'
+              location: 'Central India'
+              templateLocation: 'Linked artifact'
+              csmFile: 'armtemplates/wp-cms.api.template.json'
+              csmParametersFile: 'armtemplates/wp-cms-parameters.json'
+              overrideParameters: '-wp-cms-ServiceUrl "https://api.healthrx.co.in/wp-cms"'
+              deploymentMode: 'Incremental'
+          - task: CmdLine@2
+            inputs:
+              script: |
+                yarn --immutable
+#                yarn run test:cov

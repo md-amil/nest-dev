@@ -1,0 +1,17 @@
+version: 0.0.1
+apimServiceName: '#{apimservice}#'
+outputLocation: armtemplates
+subscriptionRequired: false
+baseFileName: wp-cms
+apis:
+  - name: wp-cms
+    displayName: wp-cms
+    description: WP CMS APIs
+    type: http
+    policy: '#{guestAuthUrl}#'
+    openApiSpec: ./api-management/wp-cms/open-api.yaml
+    serviceUrl: '#{serviceUrl}#'
+    subscriptionRequired: false
+    openApiSpecFormat: OpenApi30
+    suffix: wp-cms
+    operations:

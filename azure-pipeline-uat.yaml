@@ -1,0 +1,107 @@
+trigger:
+  - dev
+
+variables:
+  DOCKER_BUILDKIT: 1
+  tag: $(Build.BuildId)
+  authUrl: 'https://rhccardimages.blob.core.windows.net/authpolicy/UAT/auth.xml'
+  guestAuthUrl: 'https://rhccardimages.blob.core.windows.net/authpolicy/UAT/guestauth.xml'
+  serviceUrl: 'https://dev-api.healthrx.co.in/wp-cms'
+  dockerfilePath: '**/Dockerfile'
+  repository: 'wp-cms'
+  image: $(repository):$(tag)
+
+resources:
+  - repo: self
+
+pool: build-scaleset001
+
+stages:
+  #  - stage: Validate
+  #    displayName: Quality Checks
+  #    jobs:
+  #      - job: quality_checks
+  #        workspace:
+  #          clean: all
+  #        displayName: SonarQube Coverage Report
+  #        steps:
+  #          - task: NodeTool@0
+  #            inputs:
+  #              versionSource: 'spec'
+  #              versionSpec: '16.x'
+  #          - task: CmdLine@2
+  #            displayName: Run Unit Tests
+  #            inputs:
+  #              script: |
+  #                yarn install
+  #                yarn test:cov
+  #
+  #          - task: SonarQubePrepare@4
+  #            displayName: Preparing Sonar
+  #            inputs:
+  #              SonarQube: 'wp-cms'
+  #              scannerMode: 'CLI'
+  #              configMode: 'file'
+  #          - task: SonarQubeAnalyze@4
+  #            displayName: Analyzing Code
+  #          - task: SonarQubePublish@4
+  #            displayName: Publishing SonarQube report
+  - stage: Build
+    displayName: Build
+    jobs:
+      - job: Build
+        workspace:
+          clean: all
+        displayName: Build
+        steps:
+          - task: Docker@2
+            displayName: Build image ($(image))
+            inputs:
+              repository: $(repository)
+              containerRegistry: managedcare-acr01
+              command: 'build'
+              Dockerfile: $(dockerfilePath)
+              tags: |
+                $(tag)
+                latest
+              addBaseImageData: true
+              arguments: |
+                --build-arg BUILDKIT_INLINE_CACHE=1
+                --build-arg BASE_IMAGE=bfhlcontainerregistry.azurecr.io/node:20-alpine3.18
+                --cache-from bfhlcontainerregistry.azurecr.io/$(repository)
+
+          - task: Docker@2
+            displayName: Push image ($(image))
+            inputs:
+              repository: '$(repository)'
+              Dockerfile: $(dockerfilePath)
+              command: 'push'
+              containerRegistry: managedcare-acr01
+              tags: |
+                $(tag)
+                latest
+  - stage: Deploy
+    displayName: Deploy
+    jobs:
+      - job: Deploy
+        workspace:
+          clean: all
+        displayName: Deploy
+        steps:
+          - task: HelmInstaller@1
+            displayName: Installing helm
+            inputs:
+              helmVersionToInstall: '3.13.3'
+
+          - task: HelmDeploy@0
+            displayName: Deployment
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceConnection: 'bfhl-dev-aks'
+              command: 'upgrade'
+              chartType: 'FilePath'
+              chartPath: './helm-chart'
+              namespace: "phr"
+              releaseName: $(repository)
+              overrideValues: 'image.tag=$(tag)'
+              valueFile: './helm-chart/values-dev.yaml'
